@@ -32,7 +32,7 @@
 # %option G_OPT_R_OUTPUT
 # % key: mask
 # % required: no
-# % description: Output bitmask raster: 1 cloud, 2 shadow, 4 water, 8 snow/ice, 16 cirrus, 32 haze, 64 filled
+# % description: Output bitmask raster: 1 cloud, 2 shadow, 4 water, 8 snow/ice, 16 cirrus, 32 haze, 64 filled, 128 ice-phase cloud
 # % guisection: Output
 # %end
 
@@ -200,11 +200,26 @@
 # %end
 
 # %option
+# % key: wv_margin
+# % type: double
+# % required: no
+# % answer: 0.04
+# % description: Top-of-atmosphere input: thin cloud needs water vapour bands (940, 1130 nm) this fraction shallower than the clear ground around it
+# % guisection: Detection
+# %end
+
+# %option
 # % key: o2_margin
 # % type: double
 # % required: no
-# % answer: 0.01
-# % description: Top-of-atmosphere input: thin cloud needs an O2-A band depth this much below the clear ground around it (0 = no O2-A test)
+# % answer: 0.016
+# % description: Top-of-atmosphere input without water vapour bands: thin cloud needs an O2-A band depth this much below the clear ground around it
+# % guisection: Detection
+# %end
+
+# %flag
+# % key: p
+# % description: Do not use the photon path length (water vapour, O2-A) on top-of-atmosphere input
 # % guisection: Detection
 # %end
 
@@ -283,12 +298,15 @@ def load_module(name, modname, libname=None):
 
     path = get_lib_path(modname=modname, libname=libname)
     here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [path] if path else []
-    # Source tree, then the DEBIAN_BUILD layout <prefix>/lib/<module>.
-    candidates += [
-        here,
-        os.path.join(os.path.dirname(here), "lib", "i.hyper.cloudremoval"),
-    ]
+    # Next to the script first, so that a source tree never runs with an
+    # older installed helper; then $ETC/<modname>, then the DEBIAN_BUILD
+    # layout <prefix>/lib/<module>.
+    candidates = [here]
+    if path:
+        candidates.append(path)
+    candidates.append(
+        os.path.join(os.path.dirname(here), "lib", "i.hyper.cloudremoval")
+    )
     for directory in candidates:
         if directory and os.path.isfile(os.path.join(directory, f"{name}.py")):
             if directory not in sys.path:
@@ -444,6 +462,7 @@ def write_mask(mapname, mask, exterior, lib, garray, np):
     )
     colours = (
         (lib.MASK_FILLED, "255:0:255"),
+        (lib.MASK_ICE, "200:235:255"),
         (lib.MASK_CLOUD, "255:255:255"),
         (lib.MASK_SHADOW, "60:60:60"),
         (lib.MASK_SNOW, "0:255:255"),
@@ -461,7 +480,7 @@ def write_mask(mapname, mask, exterior, lib, garray, np):
     gs.run_command(
         "r.support",
         map=mapname,
-        title="Cloud, shadow, water, snow, cirrus and haze bitmask",
+        title="Cloud, shadow, water, snow, cirrus, haze and cloud phase bitmask",
         units="bitmask",
     )
     gs.raster_history(mapname)
@@ -661,7 +680,9 @@ def main():
             "cloud_height": heights,
             "thin_cloud": not flags["t"],
             "thin_blue": float(options["thin_blue"]),
-            "o2_margin": float(options["o2_margin"]) if toa else 0.0,
+            "path_test": toa and not flags["p"],
+            "wv_margin": float(options["wv_margin"]),
+            "o2_margin": float(options["o2_margin"]),
         }
         geometry = None
         if zen is not None and azi is not None:
@@ -673,10 +694,23 @@ def main():
             mask, det_info = lib.detect(wb, params, geometry)
         except lib.CloudError as error:
             gs.fatal(str(error))
-        if det_info.get("thin_rejected_o2"):
-            gs.verbose(
-                _("{} thin-cloud candidates rejected by the O2-A test").format(
-                    det_info["thin_rejected_o2"]
+        if "path_test" in det_info:
+            gs.message(
+                _(
+                    "Path length ({}): {} thin-cloud candidates rejected, {} snow "
+                    "pixels lifted to ice cloud"
+                ).format(
+                    det_info["path_test"],
+                    det_info["thin_rejected_path"],
+                    det_info["snow_lifted"],
+                )
+            )
+        elif toa and not flags["p"]:
+            gs.message(_("No water vapour or O2-A band: no path-length test"))
+        if det_info["ice_from_snow"]:
+            gs.message(
+                _("{} snow-like pixels reclassified as ice cloud").format(
+                    det_info["ice_from_snow"]
                 )
             )
         if det_info["thin_pixels"]:
@@ -879,7 +913,10 @@ def main():
             + ", ".join(f"{label} {pct:.1f}%" for label, pct in counts.items())
         )
         stats.update(
-            {f"{k.replace('/', '_')}_percent": round(v, 3) for k, v in counts.items()}
+            {
+                f"{k.replace('/', '_').replace(' ', '_')}_percent": round(v, 3)
+                for k, v in counts.items()
+            }
         )
         stats["operations"] = operations
         stats["fill_method"] = fill_methods

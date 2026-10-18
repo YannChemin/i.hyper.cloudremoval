@@ -19,9 +19,15 @@ Sources of the rules:
   positives on clear land.
 - Cirrus: the 1.38 um water-vapour band (Gao et al. 1993, GRL 20:301), with
   ATCOR's thin (0.010) and cirrus-cloud (0.040) reflectance tiers.
-  On top-of-atmosphere data a thin-cloud pixel must also have an O2-A
-  band shallower than the clear ground around it: a cloud shortens the
-  photon path (the physics of libsixsv retrieve_pressure_o2a()).
+  On top-of-atmosphere data a thin-cloud pixel must also have shallower
+  water vapour bands (940, 1130 nm), or failing them a shallower O2-A band,
+  than the clear ground around it: a cloud shortens the photon path (the
+  physics of libsixsv retrieve_pressure_o2a()).
+- Snow or ice cloud: snow must show a 1.03 um grain-size band deeper than
+  0.02 (Nolin and Dozier 2000, Remote Sens. Environ. 74:207), and on
+  top-of-atmosphere data a full photon path; otherwise it is ice cloud.
+- Cloud phase: ice where the reflectance climbs steeply from 1.55 to
+  1.70 um (Pilewskie and Twomey 1987; Knap et al. 2002).
 - Water and snow: the ATCOR rules of HyPro Classification.py.
 - Cloud shadow: the libsixsv dark test and ATCOR's cloud-shadow test,
   restricted to the cloud mask projected along the anti-solar direction.
@@ -50,6 +56,7 @@ MASK_SNOW = 0x08
 MASK_CIRRUS = 0x10
 MASK_HAZE = 0x20
 MASK_FILLED = 0x40
+MASK_ICE = 0x80
 
 MASK_LABELS = (
     (MASK_CLOUD, "cloud"),
@@ -59,6 +66,7 @@ MASK_LABELS = (
     (MASK_CIRRUS, "cirrus"),
     (MASK_HAZE, "haze"),
     (MASK_FILLED, "filled"),
+    (MASK_ICE, "ice phase"),
 )
 
 # Centre and half width (nm) of the wavebands used by the tests. Bands within
@@ -72,10 +80,24 @@ BANDS = {
     "cirrus": (1380.0, 10.0, 20.0),
     "swir1": (1650.0, 20.0, 50.0),
     "swir2": (2200.0, 20.0, 50.0),
-    "o2_left": (740.0, 6.0, 15.0),
-    "o2": (762.0, 4.0, 8.0),
-    "o2_right": (780.0, 6.0, 15.0),
+    "p1550": (1550.0, 10.0, 20.0),
+    "p1700": (1700.0, 10.0, 20.0),
 }
+
+# Absorption features: (left shoulder, centre, right shoulder) in nm. The
+# depth is 1 - rho_centre / continuum, the continuum linear between the
+# shoulders. O2-A and water vapour measure the photon path length; the
+# 1.03 um ice band measures the ice grain size (Nolin and Dozier 2000 put
+# its continuum at 0.95 and 1.09 um).
+FEATURES = {
+    "o2a": (740.0, 762.0, 780.0),
+    "wv940": (865.0, 940.0, 1040.0),
+    "wv1130": (1060.0, 1130.0, 1240.0),
+    "ice1030": (950.0, 1030.0, 1090.0),
+}
+for _name, _wls in FEATURES.items():
+    for _side, _wl in zip(("_l", "_c", "_r"), _wls, strict=True):
+        BANDS[_name + _side] = (_wl, 4.0, 10.0)
 
 
 class CloudError(Exception):
@@ -372,15 +394,59 @@ def shadow_zone(
     return zone & ~cloud
 
 
-def o2a_depth(bands):
-    """O2-A band depth 1 - rho_762 / continuum, the continuum interpolated
-    between 740 and 780 nm; None without the three wavebands."""
-    left, centre, right = bands.get("o2_left"), bands.get("o2"), bands.get("o2_right")
+def feature_depth(bands, name):
+    """Depth of an absorption feature of FEATURES, or None without its bands."""
+    left, centre, right = (bands.get(name + side) for side in ("_l", "_c", "_r"))
     if left is None or centre is None or right is None:
         return None
-    w = (762.0 - 740.0) / (780.0 - 740.0)
+    wl_l, wl_c, wl_r = FEATURES[name]
+    w = (wl_c - wl_l) / (wl_r - wl_l)
     with np.errstate(invalid="ignore", divide="ignore"):
         return 1.0 - centre / ((1.0 - w) * left + w * right)
+
+
+def path_length_anomaly(bands, reference, params):
+    """Pixels whose light path is shorter than over the ground around them.
+
+    Light reflected by a cloud does not cross the air below it, so its water
+    vapour and O2-A bands are shallower than those of the clear ground
+    nearby (the reference, a Gaussian-weighted local mean, so that it
+    follows the terrain). Water vapour, mostly in the lowest kilometres,
+    is used when its bands show absorption: the mean relative residual of
+    the 940 and 1130 nm bands must be below -wv_margin. Otherwise the O2-A
+    residual must be below -o2_margin. Top-of-atmosphere data only.
+
+    On EMIT, clear ground (UAE, with mountains) gave a 0.5th percentile of
+    -3.0% for the water vapour residual and -0.016 for O2-A; cirrus near
+    Tehran gave -5.5 to -5.9% (90th percentile) and cloud-like bright ground
+    -1% (10th percentile). O2-A separated them poorly.
+
+    :return: (2-D boolean mask, name of the test), or None
+    """
+    sigma = params.get("path_sigma", 25.0)
+    rels = []
+    for name in ("wv940", "wv1130"):
+        depth = feature_depth(bands, name)
+        if depth is None:
+            continue
+        ref = local_mean(depth, reference, sigma)
+        # A band with no absorption (an atmospherically corrected product)
+        # has no path-length signal.
+        if not np.nanmedian(ref) > 0.05:
+            continue
+        with np.errstate(invalid="ignore", divide="ignore"):
+            rels.append((depth - ref) / ref)
+    if rels:
+        with _quiet_nan(), np.errstate(invalid="ignore"):
+            rel = np.nanmean(np.stack(rels), axis=0)
+            return rel < -params.get("wv_margin", 0.04), "water vapour"
+    depth = feature_depth(bands, "o2a")
+    if depth is not None:
+        ref = local_mean(depth, reference, sigma)
+        if np.nanmedian(ref) > 0.05:
+            with np.errstate(invalid="ignore"):
+                return depth < ref - params.get("o2_margin", 0.016), "O2-A"
+    return None
 
 
 def local_mean(values, weights, sigma):
@@ -406,8 +472,9 @@ def detect(bands, params, geometry=None):
     :param dict params: thresholds; keys cloud_blue, cloud_ndvi, cloud_nir,
         cirrus_thin, cirrus_cloud, use_cirrus, shadow_dark, buffer, min_size,
         cloud_height (min, max), and optionally thin_cloud (bool, default
-        True), thin_blue (default 0.08), o2_margin (0: no O2-A test) and
-        o2_sigma (pixels, default 25)
+        True), thin_blue (default 0.08), path_test (bool, top-of-atmosphere
+        data only, default False), wv_margin (0.04), o2_margin (0.016),
+        path_sigma (pixels, 25), snow_depth (0.02) and ice_phase (0.25)
     :param dict geometry: sun_zenith, sun_azimuth, pixel_size, or None
     :return: (mask uint8, info dict)
     """
@@ -443,8 +510,20 @@ def detect(bands, params, geometry=None):
                 if swir2 is not None:
                     snow |= (green > 0.22) & (ndsi > 0.25) & (swir2 < 0.5 * green)
                 snow &= ok1
-                cloud &= ~snow
                 info["tests"].append("NIR > SWIR1 and snow (NDSI)")
+        # The 1.03 um ice band deepens with the square root of the grain size
+        # (Nolin and Dozier 2000): roughly 0.05 for fine snow (50 um), 0.065
+        # at 100 um, 0.03 for a thick cloud of 25 um crystals. On EMIT L2A the
+        # correction over ice-cloud tops even made it -0.02. Snow below
+        # snow_depth (0.02) is ice cloud; doubtful cases stay snow.
+        ice_cloud = np.zeros_like(cloud)
+        grain = feature_depth(bands, "ice1030")
+        if grain is not None and snow.any():
+            no_grain = snow & ~(grain > params.get("snow_depth", 0.02))
+            ice_cloud |= no_grain
+            snow &= ~no_grain
+            info["tests"].append("snow grain (1.03 um)")
+        cloud &= ~snow
 
         cirrus_mask = np.zeros_like(cloud)
         if params.get("use_cirrus") and cirrus is not None:
@@ -462,25 +541,25 @@ def detect(bands, params, geometry=None):
             # SWIR1 test used for thick cloud rejects it.
             if swir1 is not None:
                 thin &= ~np.isfinite(swir1) | (nir > swir1)
-            thin &= finite & ~cloud & ~snow & ~water
-            # Top of atmosphere only: light reflected by a cloud skips the air
-            # below it, so its O2-A band is shallower than over the ground
-            # around it. The local reference follows the terrain.
-            margin = params.get("o2_margin") or 0.0
-            depth = o2a_depth(bands) if margin > 0 else None
-            if depth is not None:
-                ref = local_mean(
-                    depth,
-                    finite & ~cloud & ~thin & ~water,
-                    params.get("o2_sigma", 25.0),
-                )
-                with np.errstate(invalid="ignore"):
-                    confirmed = depth < ref - margin
-                info["thin_rejected_o2"] = int((thin & ~confirmed).sum())
-                thin &= confirmed
-                info["tests"].append("O2-A path length")
-            thin = remove_small_objects(thin, params["min_size"])
+            thin &= finite & ~cloud & ~snow & ~water & ~ice_cloud
             info["tests"].append("thin cloud (Fmask potential cloud)")
+        if params.get("path_test"):
+            reference = finite & ~cloud & ~snow & ~ice_cloud & ~water & ~thin
+            path = path_length_anomaly(bands, reference, params)
+            if path is not None:
+                elevated, name = path
+                info["path_test"] = name
+                info["tests"].append(f"{name} path length")
+                info["thin_rejected_path"] = int((thin & ~elevated).sum())
+                thin &= elevated
+                # Snow is on the ground; bright "snow" above it is ice cloud.
+                lifted = snow & elevated
+                info["snow_lifted"] = int(lifted.sum())
+                ice_cloud |= lifted
+                snow &= ~lifted
+        thin = remove_small_objects(thin, params["min_size"])
+        info["ice_from_snow"] = int(ice_cloud.sum())
+        cloud |= ice_cloud & finite
         cloud |= thin
 
         deep = (
@@ -533,6 +612,15 @@ def detect(bands, params, geometry=None):
     mask[water] |= MASK_WATER
     mask[snow] |= MASK_SNOW
     mask[cirrus_mask & finite] |= MASK_CIRRUS
+    # Cloud phase: ice absorbs more than liquid water toward 1.55 um, so
+    # reflectance climbs steeply from 1.55 to 1.70 um over ice cloud (after
+    # Pilewskie and Twomey 1987 and Knap et al. 2002). On EMIT the normalised
+    # difference was 0.30-0.36 over ice cloud and 0.03-0.18 over liquid.
+    p1550, p1700 = bands.get("p1550"), bands.get("p1700")
+    if p1550 is not None and p1700 is not None:
+        with np.errstate(invalid="ignore"):
+            ice = cloud & (ndi(p1700, p1550) > params.get("ice_phase", 0.25))
+        mask[ice] |= MASK_ICE
     return mask, info
 
 

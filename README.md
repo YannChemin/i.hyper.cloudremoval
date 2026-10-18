@@ -6,9 +6,11 @@ Tanager, ...), in radiance or in reflectance.
 
 - **Detection** (bitmask compatible with *i.hyper.atcorr* `-m`): cloud
   (Braaten/ATCOR brightness), thin cloud (Fmask potential cloud, confirmed
-  by the O2-A band depth on top-of-atmosphere data), opaque and thin
-  cirrus (1380 nm), cloud shadow (dark pixels in the cloud mask projected
-  away from the sun), water, snow/ice, haze (HOT).
+  on top-of-atmosphere data by the photon path length from the water
+  vapour bands, or the O2-A band), opaque and thin cirrus (1380 nm),
+  cloud shadow (dark pixels in the cloud mask projected away from the
+  sun), water, snow/ice (with the 1.03 µm grain band to tell it from ice
+  cloud), haze (HOT) and ice-phase cloud (1.55-1.70 µm slope).
 - **Corrections**: cirrus subtraction from the 1380 nm band (Gao), haze
   removal by dark-object subtraction per HOT level (Zhang, Liang).
 - **Removal**: NULL, fill from another date (robust reduced-major-axis

@@ -310,24 +310,109 @@ def test_detect_thin_cloud_not_urban():
     assert not (mask & cl.MASK_CLOUD).any()
 
 
-def test_detect_o2a_rejects_ground_lookalikes():
-    """At the top of atmosphere a thin cloud has a shallower O2-A band than
-    the ground around it; a look-alike patch at ground level is rejected."""
-    rng = np.random.default_rng(9)
+def toa_scene(rng):
+    """Vegetation with water vapour (940, 1130 nm) and O2-A absorption as
+    seen from space, a thin cloud above it and a look-alike on the ground."""
     cube = scene(60, 60, rng, fractions=np.ones((60, 60)))
     veil = np.where((WL >= 1350) & (WL <= 1420), 0.0, 0.15).astype(np.float32)
     cube[:, 10:20, 10:20] = (VEG + veil)[:, None, None]
     cube[:, 40:50, 40:50] = (VEG + veil)[:, None, None]
-    i760 = cl.band_index(WL, 760.0, 5.0)
-    # Ground: O2-A depth 0.30. The real cloud's photons skip the lower air.
-    cube[i760] *= 0.70
-    cube[i760, 10:20, 10:20] = (VEG + veil)[i760] * 0.78
-    params = dict(PARAMS, o2_margin=0.01)
+    return cube
+
+
+def absorb(cube, centre, depth, where=np.s_[:, :]):
+    """Deepen the band at centre to the given depth below its continuum."""
+    i = cl.band_index(WL, centre, 5.0)
+    cube[(i, *where) if isinstance(where, tuple) else i] *= 1.0 - depth
+
+
+def test_detect_water_vapour_path_length():
+    """The cloud's water vapour bands are 20% shallower than the ground's;
+    the look-alike's are not, so it is rejected."""
+    rng = np.random.default_rng(9)
+    cube = toa_scene(rng)
+    for centre in (940.0, 1130.0):
+        i = cl.band_index(WL, centre, 5.0)
+        cube[i] *= 0.25
+        cube[i, 10:20, 10:20] = cube[i, 10:20, 10:20] / 0.25 * 0.40
+    params = dict(PARAMS, path_test=True)
     mask, info = cl.detect(cl.read_bands(cube, WL), params)
     cloud = (mask & cl.MASK_CLOUD) != 0
+    assert info["path_test"] == "water vapour"
     assert cloud[10:20, 10:20].all()
     assert not cloud[40:50, 40:50].any()
-    assert info["thin_rejected_o2"] == 100
+    assert info["thin_rejected_path"] == 100
+
+
+def test_detect_o2a_fallback():
+    """Without water vapour absorption the O2-A band decides."""
+    rng = np.random.default_rng(9)
+    cube = toa_scene(rng)
+    i760 = cl.band_index(WL, 760.0, 5.0)
+    cube[i760] *= 0.70
+    cube[i760, 10:20, 10:20] = cube[i760, 10:20, 10:20] / 0.70 * 0.78
+    params = dict(PARAMS, path_test=True)
+    mask, info = cl.detect(cl.read_bands(cube, WL), params)
+    cloud = (mask & cl.MASK_CLOUD) != 0
+    assert info["path_test"] == "O2-A"
+    assert cloud[10:20, 10:20].all()
+    assert not cloud[40:50, 40:50].any()
+
+
+def test_no_path_test_on_surface_reflectance():
+    """Without any absorption band depth there is no path-length signal."""
+    rng = np.random.default_rng(9)
+    mask, info = cl.detect(
+        cl.read_bands(toa_scene(rng), WL), dict(PARAMS, path_test=True)
+    )
+    assert "path_test" not in info
+    assert ((mask & cl.MASK_CLOUD) != 0)[40:50, 40:50].all()
+
+
+SNOW = spectrum([(400, 0.92), (550, 0.90), (660, 0.88), (860, 0.80), (950, 0.72),
+                 (1030, 0.58), (1090, 0.66), (1250, 0.45), (1500, 0.05), (1650, 0.10),
+                 (1700, 0.12), (2000, 0.01), (2200, 0.05), (2500, 0.02)])  # fmt: skip
+# Ice-cloud tops as seen by EMIT on 2026-06-03: snow-like in the SWIR but
+# without the 1.03 um grain band, and steep from 1550 to 1700 nm.
+ICE_CLOUD = spectrum([(400, 0.76), (550, 0.73), (860, 0.70), (950, 0.62), (1030, 0.647),
+                      (1090, 0.647), (1240, 0.53), (1450, 0.36), (1500, 0.105),
+                      (1550, 0.126), (1600, 0.187), (1650, 0.216), (1700, 0.256),
+                      (1750, 0.28), (2000, 0.043), (2200, 0.186), (2500, 0.1)])  # fmt: skip
+
+
+def test_snow_grain_separates_snow_from_ice_cloud():
+    """Snow with the 1.03 um grain band stays snow; the ice cloud becomes
+    cloud and is flagged ice phase; the liquid cloud is not."""
+    rng = np.random.default_rng(11)
+    cube = scene(40, 40, rng)
+    cube[:, 5:15, 5:15] = SNOW[:, None, None]
+    cube[:, 25:35, 5:15] = ICE_CLOUD[:, None, None]
+    cube[:, 25:35, 25:35] = CLOUD[:, None, None]
+    mask, info = cl.detect(cl.read_bands(cube, WL), PARAMS)
+    snow = (mask & cl.MASK_SNOW) != 0
+    cloud = (mask & cl.MASK_CLOUD) != 0
+    ice = (mask & cl.MASK_ICE) != 0
+    assert snow[5:15, 5:15].all() and not cloud[5:15, 5:15].any()
+    assert cloud[25:35, 5:15].all() and not snow[25:35, 5:15].any()
+    assert info["ice_from_snow"] == 100
+    assert ice[25:35, 5:15].all()
+    assert cloud[25:35, 25:35].all() and not ice[25:35, 25:35].any()
+
+
+def test_path_length_lifts_snow_to_ice_cloud():
+    """On top-of-atmosphere data snow with a short light path is cloud."""
+    rng = np.random.default_rng(12)
+    cube = scene(60, 60, rng)
+    cube[:, 5:15, 5:15] = SNOW[:, None, None]
+    cube[:, 40:50, 40:50] = SNOW[:, None, None]
+    for centre in (940.0, 1130.0):
+        i = cl.band_index(WL, centre, 5.0)
+        cube[i] *= 0.25
+        cube[i, 40:50, 40:50] = cube[i, 40:50, 40:50] / 0.25 * 0.45
+    mask, info = cl.detect(cl.read_bands(cube, WL), dict(PARAMS, path_test=True))
+    assert ((mask & cl.MASK_SNOW) != 0)[5:15, 5:15].all()
+    assert ((mask & cl.MASK_CLOUD) != 0)[40:50, 40:50].all()
+    assert info["snow_lifted"] == 100
 
 
 def test_cirrus_correction_refuses_implausible_slope():

@@ -71,7 +71,7 @@ swath), are no data: NULL in the mask and unchanged in the output.</p>
 <td style="text-align: right;">3</td>
 <td style="text-align: right;">8</td>
 <td>snow/ice</td>
-<td>NDSI and brightness (ATCOR)</td>
+<td>NDSI and brightness (ATCOR), 1.03 µm grain band</td>
 </tr>
 <tr>
 <td style="text-align: right;">4</td>
@@ -91,6 +91,12 @@ swath), are no data: NULL in the mask and unchanged in the output.</p>
 <td>filled</td>
 <td>pixel filled by <strong>fill_method</strong></td>
 </tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">128</td>
+<td>ice phase</td>
+<td>cloud whose reflectance climbs steeply from 1.55 to 1.70 µm</td>
+</tr>
 </tbody>
 </table>
 <p>Bits 0 to 3 match the quality map of <em>i.hyper.atcorr</em> <strong>-m</strong>.</p>
@@ -103,11 +109,24 @@ swath), are no data: NULL in the mask and unchanged in the output.</p>
   (Zhu and Woodcock 2012), with the NIR &gt; SWIR1 test in place of Fmask's
   thermal test. Thin cloud grows by <strong>buffer</strong> pixels only into pixels
   whose 470 nm reflectance is above <strong>thin_blue</strong>, so that it takes its
-  bright fringe and not the dark vegetation around it. On
-  top-of-atmosphere input a thin-cloud pixel must also have an O2-A band
-  (762 nm) at least <strong>o2_margin</strong> shallower than the clear ground within
-  about 25 pixels: light reflected by a cloud does not cross the air below
-  it. The reference is local so that it follows the terrain.</li>
+  bright fringe and not the dark vegetation around it.</li>
+<li><strong>Photon path length</strong> (top-of-atmosphere input; skipped with <strong>-p</strong>):
+  light reflected by a cloud does not cross the air below it, so its
+  absorption bands are shallower than those of the ground. A thin-cloud
+  pixel must have water vapour bands (940 and 1130 nm, mean relative band
+  depth) at least <strong>wv_margin</strong> shallower than the clear ground within
+  about 25 pixels; the reference is local so that it follows the terrain.
+  Without water vapour bands the O2-A band (762 nm) must be at least
+  <strong>o2_margin</strong> shallower. Snow with a short light path is ice cloud.</li>
+<li><strong>Snow or ice cloud</strong>: ice cloud tops absorb at 1.6 µm like snow. Snow
+  must also show the 1.03 µm ice band of its large grains (Nolin and Dozier
+  2000), deeper than 0.02; snow-like pixels without it are ice cloud.</li>
+<li><strong>Cloud phase</strong>: ice absorbs more than liquid water toward 1.55 µm, so
+  the reflectance of an ice cloud climbs steeply from 1.55 to 1.70 µm
+  (Pilewskie and Twomey 1987; Knap et al. 2002). A cloud pixel whose
+  normalised difference of 1700 and 1550 nm exceeds 0.25 gets the ice
+  phase bit. This is a spectral-slope index, not the liquid/ice path
+  retrieval of Thompson et al. (2016).</li>
 <li><strong>Cirrus</strong> (top-of-atmosphere input only): the 1380 nm water vapour band
   sees only high clouds (Gao et al. 1993). Above <strong>cirrus_cloud</strong> the
   cirrus is opaque and counts as cloud (ATCOR tiers).</li>
@@ -169,18 +188,31 @@ and peaked at 4.3 GB: count about 4 GB per million pixels at 250 bands,
 and process larger scenes by parts of the region.</p>
 <p>The detection thresholds are defined on reflectance. They hold for
 top-of-atmosphere and for surface reflectance; the cirrus test, the
-cirrus correction and the O2-A test need top-of-atmosphere data, since
-an atmospheric correction removes the signal they use.</p>
-<p>Ice clouds absorb at 1.6 µm like snow, so in surface reflectance input
-the tops of thick ice clouds can be classed as snow/ice, which is not
-removed. In top-of-atmosphere input their 1380 nm signal makes them cloud.</p>
+cirrus correction and the path-length test need top-of-atmosphere data,
+since an atmospheric correction removes the signal they use.</p>
+<p>Most tests are multispectral rules (Braaten, ATCOR, Fmask, HOT). The ones
+that need narrow bands are the path length (water vapour, O2-A), the
+1.03 µm grain band, the cloud phase slope between 1.55 and 1.70 µm, the
+band-by-band cirrus correction and the spectral fills.</p>
 <p>The thin-cloud growth bound <strong>thin_blue</strong>=0.08 was chosen on EMIT L2A
 scenes over Belgium, checked against clear dates one week apart: 79-90%
 of the thin-cloud pixels were found, with 0.1-1% false positives on clear
-land. The <strong>o2_margin</strong> default comes from the depth of the O2-A band at
-the surface (about 0.3) and the 5-10% shallower band of a cloud 1 km
-above the ground; it removed bright-soil false positives in a radiance
-scene near Tehran, but has not been checked on a cloudy radiance scene.</p>
+land.</p>
+<p>The path-length margins were set on EMIT radiance. On clear ground (an
+August scene over the UAE, mountains included) the water vapour residual
+had a 0.5th percentile of -3.0% and the O2-A residual -0.016. Over cirrus
+near Tehran 99% of the cloud pixels passed <strong>wv_margin</strong>=0.04, against
+0.3% of the bright ground that the Fmask tests had taken for cloud. The
+O2-A band of EMIT is too noisy to separate them as well, so it is only
+the fallback.</p>
+<p>The 1.03 µm band depth grows with the square root of the grain size:
+roughly 0.05 for fine snow (50 µm), 0.065 at 100 µm and 0.03 for a thick
+cloud of 25 µm crystals (estimates, not measurements). Over the ice-cloud
+tops of an EMIT L2A scene the atmospheric correction made it -0.02. The
+0.02 threshold leaves doubtful cases as snow, which is not removed; no
+snow scene was available to check it. The cloud phase threshold 0.25 lies
+between the ice cloud (0.30-0.36) and the liquid clouds (0.03-0.18) of
+the same EMIT scenes. A thin ice cloud over the ground can stay below it.</p>
 <h2>EXAMPLES</h2>
 <p>Mask clouds and shadows, and set them to NULL:</p>
 <pre><code class="language-sh">i.hyper.cloudremoval input=emit_20230621 output=emit_20230621_cr mask=emit_20230621_mask
@@ -225,15 +257,27 @@ i.hyper.cloudremoval input=emit_l1b output=emit_l1b_cr input_mask=atcorr_quality
 <li>Gao, B.-C., &amp; Li, R.-R. (2017). Removal of thin cirrus scattering
   effects in Landsat 8 OLI images using the cirrus detecting channel.
   <em>Remote Sensing</em>, 9(8), 834.</li>
+<li>Knap, W. H., Stammes, P., &amp; Koelemeijer, R. B. A. (2002). Cloud
+  thermodynamic-phase determination from near-infrared spectra of
+  reflected sunlight. <em>Journal of the Atmospheric Sciences</em>, 59(1), 83-96.</li>
 <li>Liang, S., Fang, H., &amp; Chen, M. (2001). Atmospheric correction of
   Landsat ETM+ land surface imagery. I. Methods. <em>IEEE Transactions on
   Geoscience and Remote Sensing</em>, 39(11), 2490-2498.</li>
+<li>Nolin, A. W., &amp; Dozier, J. (2000). A hyperspectral method for remotely
+  sensing the grain size of snow. <em>Remote Sensing of Environment</em>, 74(2),
+  207-216.</li>
+<li>Pilewskie, P., &amp; Twomey, S. (1987). Discrimination of ice from water in
+  clouds by optical remote sensing. <em>Atmospheric Research</em>, 21(2),
+  113-122.</li>
 <li>Richter, R. (1996). Atmospheric correction of satellite data with haze
   removal including a haze/clear transition region. <em>Computers &amp;
   Geosciences</em>, 22(6), 675-681.</li>
 <li>Thuillier, G., et al. (2003). The solar spectral irradiance from 200 to
   2400 nm as measured by the SOLSPEC spectrometer from the Atlas and
   Eureca missions. <em>Solar Physics</em>, 214, 1-22.</li>
+<li>Thompson, D. R., McCubbin, I., Gao, B.-C., et al. (2016). Measuring
+  cloud thermodynamic phase with shortwave infrared imaging spectroscopy.
+  <em>Journal of Geophysical Research: Atmospheres</em>, 121(15), 9174-9190.</li>
 <li>Zhang, Y., Guindon, B., &amp; Cihlar, J. (2002). An image transform to
   characterize and compensate for spatial variations in thin cloud
   contamination of Landsat images. <em>Remote Sensing of Environment</em>, 82,
