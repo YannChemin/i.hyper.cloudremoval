@@ -31,7 +31,9 @@ shadows are found from darkness alone, with a warning.
 
 The computational region sets the extent and the resolution of the
 processing; the band axis is always that of the input. A large scene can
-thus be processed by parts.
+thus be processed by parts. Pixels that are NULL in every valid band, or
+exactly 0 in every valid band (fill written by some imports outside the
+swath), are no data: NULL in the mask and unchanged in the output.
 
 ### Detection
 
@@ -120,14 +122,20 @@ percentages under `cloud_removal` in its extended metadata.
 
 ## NOTES
 
-The whole cube within the computational region is held in memory as
-32-bit floats, plus a working copy of the bands being filled: about
-1 GB per million pixels for 250 bands.
+The cube within the computational region is held in memory as 32-bit
+floats, next to the read and write buffers and a working copy of the
+bands being filled. A run on 1000 x 1000 pixels of 255 bands took 90 s
+and peaked at 4.3 GB: count about 4 GB per million pixels at 250 bands,
+and process larger scenes by parts of the region.
 
 The detection thresholds are defined on reflectance. They hold for
 top-of-atmosphere and for surface reflectance; the cirrus test, the
 cirrus correction and the O2-A test need top-of-atmosphere data, since
 an atmospheric correction removes the signal they use.
+
+Ice clouds absorb at 1.6 µm like snow, so in surface reflectance input
+the tops of thick ice clouds can be classed as snow/ice, which is not
+removed. In top-of-atmosphere input their 1380 nm signal makes them cloud.
 
 The thin-cloud growth bound **thin_blue**=0.08 was chosen on EMIT L2A
 scenes over Belgium, checked against clear dates one week apart: 79-90%

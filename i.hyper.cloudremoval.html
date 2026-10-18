@@ -34,7 +34,9 @@ needs the zenith and the acquisition date. Without the azimuth, cloud
 shadows are found from darkness alone, with a warning.</p>
 <p>The computational region sets the extent and the resolution of the
 processing; the band axis is always that of the input. A large scene can
-thus be processed by parts.</p>
+thus be processed by parts. Pixels that are NULL in every valid band, or
+exactly 0 in every valid band (fill written by some imports outside the
+swath), are no data: NULL in the mask and unchanged in the output.</p>
 <h3>Detection</h3>
 <p>Every pixel gets a bitmask (<strong>mask</strong> output):</p>
 <table>
@@ -160,13 +162,18 @@ only the <strong>output</strong> cube; without it the module only detects.</p>
 the input's metadata, with the run in its history and the class
 percentages under <code>cloud_removal</code> in its extended metadata.</p>
 <h2>NOTES</h2>
-<p>The whole cube within the computational region is held in memory as
-32-bit floats, plus a working copy of the bands being filled: about
-1 GB per million pixels for 250 bands.</p>
+<p>The cube within the computational region is held in memory as 32-bit
+floats, next to the read and write buffers and a working copy of the
+bands being filled. A run on 1000 x 1000 pixels of 255 bands took 90 s
+and peaked at 4.3 GB: count about 4 GB per million pixels at 250 bands,
+and process larger scenes by parts of the region.</p>
 <p>The detection thresholds are defined on reflectance. They hold for
 top-of-atmosphere and for surface reflectance; the cirrus test, the
 cirrus correction and the O2-A test need top-of-atmosphere data, since
 an atmospheric correction removes the signal they use.</p>
+<p>Ice clouds absorb at 1.6 µm like snow, so in surface reflectance input
+the tops of thick ice clouds can be classed as snow/ice, which is not
+removed. In top-of-atmosphere input their 1380 nm signal makes them cloud.</p>
 <p>The thin-cloud growth bound <strong>thin_blue</strong>=0.08 was chosen on EMIT L2A
 scenes over Belgium, checked against clear dates one week apart: 79-90%
 of the thin-cloud pixels were found, with 0.1-1% false positives on clear

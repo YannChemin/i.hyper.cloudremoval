@@ -613,6 +613,17 @@ def main():
             gs.percent(b + 1, depth, 10)
 
         exterior = ~np.any(np.isfinite(cube[bands]), axis=0)
+        # A spectrum of exact zeros in every valid band is fill, not a
+        # measurement (some imports write 0 outside the swath).
+        zero = ~exterior & np.all(np.nan_to_num(cube[bands], nan=0.0) == 0, axis=0)
+        if zero.any():
+            gs.message(
+                _("{} pixels with all-zero spectra are treated as no data").format(
+                    int(zero.sum())
+                )
+            )
+            cube[:, zero] = np.nan
+            exterior |= zero
         inside = int((~exterior).sum())
         if inside == 0:
             gs.fatal(_("<{}> holds no data in the valid bands").format(inp))
@@ -881,6 +892,7 @@ def main():
             gs.message(_("Writing <{}>...").format(out))
             for b in range(depth):
                 cube[b] /= factors[b]
+            cube[:, zero] = 0.0
             out_arr = garray.array3d(dtype=np.float32)
             out_arr[...] = cube
             out_arr.write(mapname=out, null="nan", overwrite=True)

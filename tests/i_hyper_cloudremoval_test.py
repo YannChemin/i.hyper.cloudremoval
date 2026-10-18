@@ -254,3 +254,17 @@ def test_scaled_reflectance_refused(ds):
         run(ds, input="cube", mask="m")
     run(ds, input="cube", mask="m", input_scale=0.0001, buffer=0)
     assert ((read2d(ds, "m")[CLOUD_BLOCK] & cl.MASK_CLOUD) != 0).all()
+
+
+def test_zero_fill_is_no_data(ds):
+    """All-zero spectra (fill outside the swath) are no data: NULL in the
+    mask, unchanged in the output, and kept out of the statistics."""
+    data = cloudy()
+    data[:, :, 35:] = 0.0
+    write_cube(ds, "cube", data)
+    err = run(ds, input="cube", output="out", mask="m", buffer=0)
+    assert f"{ROWS * 15} pixels with all-zero spectra" in err
+    m = read2d(ds, "m")
+    assert (m[:, 35:] == -1).all()
+    out = read3d(ds, "out")
+    assert (out[:, :, 35:] == 0).all()
