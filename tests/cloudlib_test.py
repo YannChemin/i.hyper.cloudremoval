@@ -1,7 +1,7 @@
 """Unit tests of cloudlib on synthetic scenes with a known truth."""
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -68,6 +68,18 @@ def test_solar_position_june_solstice_noon():
     )
     assert zen == pytest.approx(23.44, abs=0.1)
     assert azi == pytest.approx(0.0, abs=2.0) or azi == pytest.approx(360.0, abs=2.0)
+
+
+def test_solar_position_keeps_fractions_of_a_second():
+    """The sun moves continuously: half a second moves it half as far as one
+    second (the time of day once dropped the fraction)."""
+    t0 = datetime(2025, 5, 31, 13, 54, 43, tzinfo=timezone.utc)
+    p0 = cl.solar_position(t0, 50.54, 4.22)
+    p05 = cl.solar_position(t0 + timedelta(microseconds=500000), 50.54, 4.22)
+    p1 = cl.solar_position(t0 + timedelta(seconds=1), 50.54, 4.22)
+    for k in range(2):
+        assert p05[k] - p0[k] == pytest.approx((p1[k] - p0[k]) / 2, rel=1e-3)
+        assert abs(p05[k] - p0[k]) > 1e-4
 
 
 def test_solar_position_morning_sun_in_the_east():

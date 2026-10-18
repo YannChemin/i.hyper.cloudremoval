@@ -179,7 +179,10 @@ def solar_position(when, lat, lon):
         - 0.5 * y * y * math.sin(4 * rad(mean_long))
         - 1.25 * ecc * ecc * math.sin(2 * rad(mean_anom))
     )
-    minutes = when.hour * 60.0 + when.minute + when.second / 60.0
+    # The time of day keeps its fraction of a second, as the Julian day does.
+    minutes = (
+        when.hour * 60.0 + when.minute + (when.second + when.microsecond / 1e6) / 60.0
+    )
     true_solar = (minutes + eq_time + 4.0 * lon) % 1440.0
     hour_angle = true_solar / 4.0 - 180.0
 
