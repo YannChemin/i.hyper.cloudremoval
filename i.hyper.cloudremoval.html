@@ -118,9 +118,14 @@ swath), are no data: NULL in the mask and unchanged in the output.</p>
   about 25 pixels; the reference is local so that it follows the terrain.
   Without water vapour bands the O2-A band (762 nm) must be at least
   <strong>o2_margin</strong> shallower. Snow with a short light path is ice cloud.</li>
-<li><strong>Snow or ice cloud</strong>: ice cloud tops absorb at 1.6 µm like snow. Snow
-  must also show the 1.03 µm ice band of its large grains (Nolin and Dozier
-  2000), deeper than 0.02; snow-like pixels without it are ice cloud.</li>
+<li><strong>Snow or ice cloud</strong>: ice cloud tops absorb at 1.6 µm like snow. On
+  surface reflectance, snow must also show the 1.03 µm ice band of its
+  large grains (Nolin and Dozier 2000), deeper than 0.02; snow-like pixels
+  without it are ice cloud. On top-of-atmosphere input the photon path
+  length decides instead: the 950 nm shoulder of the grain band lies in
+  the 940 nm water vapour band, which made the band depth about -0.7 over
+  the clear ground of an EMIT L1B scene, so every snow pixel would have
+  become cloud.</li>
 <li><strong>Cloud phase</strong>: ice absorbs more than liquid water toward 1.55 µm, so
   the reflectance of an ice cloud climbs steeply from 1.55 to 1.70 µm
   (Pilewskie and Twomey 1987; Knap et al. 2002). A cloud pixel whose

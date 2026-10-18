@@ -681,6 +681,7 @@ def main():
             "thin_cloud": not flags["t"],
             "thin_blue": float(options["thin_blue"]),
             "path_test": toa and not flags["p"],
+            "snow_grain": not toa,
             "wv_margin": float(options["wv_margin"]),
             "o2_margin": float(options["o2_margin"]),
         }

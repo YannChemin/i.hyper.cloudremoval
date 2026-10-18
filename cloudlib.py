@@ -23,9 +23,12 @@ Sources of the rules:
   water vapour bands (940, 1130 nm), or failing them a shallower O2-A band,
   than the clear ground around it: a cloud shortens the photon path (the
   physics of libsixsv retrieve_pressure_o2a()).
-- Snow or ice cloud: snow must show a 1.03 um grain-size band deeper than
-  0.02 (Nolin and Dozier 2000, Remote Sens. Environ. 74:207), and on
-  top-of-atmosphere data a full photon path; otherwise it is ice cloud.
+- Snow or ice cloud: on surface reflectance snow must show a 1.03 um
+  grain-size band deeper than 0.02 (Nolin and Dozier 2000, Remote Sens.
+  Environ. 74:207), on top-of-atmosphere data a full photon path;
+  otherwise it is ice cloud. The grain band is not used on
+  top-of-atmosphere data: its 950 nm shoulder lies in the 940 nm water
+  vapour band, which made the depth about -0.7 over EMIT L1B ground.
 - Cloud phase: ice where the reflectance climbs steeply from 1.55 to
   1.70 um (Pilewskie and Twomey 1987; Knap et al. 2002).
 - Water and snow: the ATCOR rules of HyPro Classification.py.
@@ -474,7 +477,8 @@ def detect(bands, params, geometry=None):
         cloud_height (min, max), and optionally thin_cloud (bool, default
         True), thin_blue (default 0.08), path_test (bool, top-of-atmosphere
         data only, default False), wv_margin (0.04), o2_margin (0.016),
-        path_sigma (pixels, 25), snow_depth (0.02) and ice_phase (0.25)
+        path_sigma (pixels, 25), snow_grain (bool, surface reflectance
+        only, default True), snow_depth (0.02) and ice_phase (0.25)
     :param dict geometry: sun_zenith, sun_azimuth, pixel_size, or None
     :return: (mask uint8, info dict)
     """
@@ -515,10 +519,12 @@ def detect(bands, params, geometry=None):
         # (Nolin and Dozier 2000): roughly 0.05 for fine snow (50 um), 0.065
         # at 100 um, 0.03 for a thick cloud of 25 um crystals. On EMIT L2A the
         # correction over ice-cloud tops even made it -0.02. Snow below
-        # snow_depth (0.02) is ice cloud; doubtful cases stay snow.
+        # snow_depth (0.02) is ice cloud; doubtful cases stay snow. Only on
+        # surface reflectance: at the top of the atmosphere the 950 nm
+        # shoulder sits in the 940 nm water vapour band.
         ice_cloud = np.zeros_like(cloud)
         grain = feature_depth(bands, "ice1030")
-        if grain is not None and snow.any():
+        if grain is not None and snow.any() and params.get("snow_grain", True):
             no_grain = snow & ~(grain > params.get("snow_depth", 0.02))
             ice_cloud |= no_grain
             snow &= ~no_grain

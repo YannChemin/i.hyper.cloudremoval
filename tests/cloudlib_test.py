@@ -399,6 +399,23 @@ def test_snow_grain_separates_snow_from_ice_cloud():
     assert cloud[25:35, 25:35].all() and not ice[25:35, 25:35].any()
 
 
+def test_snow_grain_not_used_on_top_of_atmosphere_data():
+    """At the top of the atmosphere water vapour hollows the 950 nm
+    shoulder of the grain band; with snow_grain off (as the module sets
+    it for such data) snow stays snow."""
+    rng = np.random.default_rng(13)
+    cube = scene(40, 40, rng)
+    cube[:, 5:15, 5:15] = SNOW[:, None, None]
+    i950 = cl.band_index(WL, 950.0, 5.0)
+    cube[i950] *= 0.4
+    bands = cl.read_bands(cube, WL)
+    mask, info = cl.detect(bands, PARAMS)
+    assert info["ice_from_snow"] == 100
+    mask, info = cl.detect(bands, dict(PARAMS, snow_grain=False))
+    assert ((mask & cl.MASK_SNOW) != 0)[5:15, 5:15].all()
+    assert info["ice_from_snow"] == 0
+
+
 def test_path_length_lifts_snow_to_ice_cloud():
     """On top-of-atmosphere data snow with a short light path is cloud."""
     rng = np.random.default_rng(12)
