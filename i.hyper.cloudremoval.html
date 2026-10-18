@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>i.hyper.cloudremoval - GRASS GIS manual</title>
+<meta charset="utf-8">
+</head>
+<body>
+
+<h2>DESCRIPTION</h2>
+<p><em>i.hyper.cloudremoval</em> detects clouds, cloud shadows, cirrus and haze in a
+hyperspectral 3D raster map (<code>raster_3d</code>) of the <em>i.hyper</em> module family,
+corrects cirrus and haze, and removes clouds and their shadows, either by
+setting them to NULL or by filling them from another date or from the
+surrounding clear pixels.</p>
+<p>The band wavelengths, widths, validity, radiometric quantity and units,
+acquisition time and sun geometry come from the map's <em>i.hyper</em> metadata
+(<code>hyper.json</code>), as written by <a href="i.hyper.import.html">i.hyper.import</a>. A map
+without this metadata is refused. Bands marked invalid are never used, and
+at filled pixels they are set to NULL.</p>
+<p>The module works in reflectance. Top-of-atmosphere radiance (EMIT L1B,
+PRISMA L1, EnMAP L1B, Tanager radiance, ...) is converted with the 6SV2.1
+solar spectrum (Thuillier 2003) averaged over each band's width, the
+Earth-Sun distance and the solar zenith; the output is written back in the
+units of the input. Surface reflectance (EMIT L2A, PRISMA L2D, ...) is used
+as it is. The radiance units are read from the metadata
+(<code>uW/cm^2/SR/nm</code>, <code>mW/(cm^2 sr um)</code>, <code>W/m^2/sr/nm</code>, ...); <strong>input_scale</strong>
+overrides them, and also rescales reflectance stored as integers (e.g.
+<strong>input_scale</strong>=0.0001). If the median reflectance at 860 nm is not
+physical, the module stops instead of misclassifying the scene.</p>
+<p>The solar zenith and azimuth come from <strong>sun_zenith</strong> and <strong>sun_azimuth</strong>,
+else from the metadata, else from the acquisition time and the centre of
+the computational region (NOAA solar position equations). Radiance input
+needs the zenith and the acquisition date. Without the azimuth, cloud
+shadows are found from darkness alone, with a warning.</p>
+<p>The computational region sets the extent and the resolution of the
+processing; the band axis is always that of the input. A large scene can
+thus be processed by parts.</p>
+<h3>Detection</h3>
+<p>Every pixel gets a bitmask (<strong>mask</strong> output):</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Bit</th>
+<th style="text-align: right;">Value</th>
+<th>Class</th>
+<th>Test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td>cloud</td>
+<td>brightness, thin cloud, opaque cirrus (below)</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td>shadow</td>
+<td>dark pixel inside the projected cloud shadows</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">4</td>
+<td>water</td>
+<td>NIR &lt; 0.05 and SWIR1 &lt; 0.03</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">8</td>
+<td>snow/ice</td>
+<td>NDSI and brightness (ATCOR)</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">16</td>
+<td>cirrus</td>
+<td>1380 nm reflectance &gt; <strong>cirrus_threshold</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">32</td>
+<td>haze</td>
+<td>HOT &gt; <strong>haze_threshold</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">64</td>
+<td>filled</td>
+<td>pixel filled by <strong>fill_method</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Bits 0 to 3 match the quality map of <em>i.hyper.atcorr</em> <strong>-m</strong>.</p>
+<ul>
+<li><strong>Cloud</strong>: 470 nm reflectance above <strong>cloud_blue</strong> with NDVI below
+  <strong>cloud_ndvi</strong>, or 860 nm reflectance above <strong>cloud_nir</strong> (Braaten et
+  al. 2015, as <em>i.hyper.atcorr</em> <strong>-m</strong>), and brighter at 860 nm than at
+  1650 nm, which rejects bright soil and sand (ATCOR). Snow is not cloud.</li>
+<li><strong>Thin cloud</strong> (skipped with <strong>-t</strong>): the potential cloud tests of Fmask
+  (Zhu and Woodcock 2012), with the NIR &gt; SWIR1 test in place of Fmask's
+  thermal test. Thin cloud grows by <strong>buffer</strong> pixels only into pixels
+  whose 470 nm reflectance is above <strong>thin_blue</strong>, so that it takes its
+  bright fringe and not the dark vegetation around it. On
+  top-of-atmosphere input a thin-cloud pixel must also have an O2-A band
+  (762 nm) at least <strong>o2_margin</strong> shallower than the clear ground within
+  about 25 pixels: light reflected by a cloud does not cross the air below
+  it. The reference is local so that it follows the terrain.</li>
+<li><strong>Cirrus</strong> (top-of-atmosphere input only): the 1380 nm water vapour band
+  sees only high clouds (Gao et al. 1993). Above <strong>cirrus_cloud</strong> the
+  cirrus is opaque and counts as cloud (ATCOR tiers).</li>
+<li><strong>Cloud shadow</strong>: dark pixels (470, 660 and 860 nm below
+  <strong>shadow_dark</strong>, or the ATCOR cloud-shadow test) within the area that
+  the clouds shade for cloud heights in <strong>cloud_height</strong>, sweeping the
+  cloud mask away from the sun.</li>
+<li>Objects smaller than <strong>min_size</strong> pixels are dropped; clouds and
+  shadows then grow by <strong>buffer</strong> pixels.</li>
+</ul>
+<p><strong>input_mask</strong> replaces the cloud and shadow tests by an external mask:
+the bits <strong>mask_bits</strong> of its values are read as cloud (1) and shadow (2),
+so the quality map of <em>i.hyper.atcorr</em> <strong>-m</strong> can be used as it is, and a
+0/1 vendor mask with <strong>mask_bits</strong>=1.</p>
+<h3>Corrections</h3>
+<p><strong>operation</strong> chooses the corrections, applied in this order. They change
+only the <strong>output</strong> cube; without it the module only detects.</p>
+<ul>
+<li><strong>cirrus</strong> (top-of-atmosphere input only): for each band, the slope 1/Ka
+  of the lower boundary of the scatter plot of the band against the
+  1380 nm reflectance is fitted, and (rho_1380 - base) / Ka is subtracted
+  (Gao et al. 1998; Gao and Li 2017). The correction is refused if the
+  median 1/Ka over 400-1000 nm is outside 0.5-3: the cirrus pixels then
+  do not cover enough surface types to separate cirrus from surface.</li>
+<li><strong>haze</strong>: the haze optimized transform (HOT, Zhang et al. 2002) is the
+  distance of a pixel above the clear line fitted to the lower boundary of
+  the blue-red scatter plot of clear land. Hazy pixels are split into HOT
+  levels; in each level the haze offset is the low percentile of each band
+  minus that of the clear land (dark-object subtraction, Liang et al.
+  2001). The offsets follow one Angstrom law fitted over 400-700 nm, are
+  interpolated in HOT and subtracted. HOT mistakes bright soil for haze,
+  so haze is only flagged and removed where NIR &gt; SWIR1. A flat offset
+  (Angstrom exponent near 0) is thin cloud rather than aerosol; it is
+  removed as ATCOR does, with a warning.</li>
+<li><strong>fill</strong>: removes cloud and shadow pixels with the methods of
+  <strong>fill_method</strong>, tried in order; pixels left over become NULL.</li>
+<li><strong>null</strong>: set them to NULL.</li>
+<li><strong>reference</strong>: take them from the <strong>reference</strong> cube, an image of
+    another date on the same bands. Its own clouds and shadows are
+    detected and not used. Each band is matched to the input by a robust
+    reduced-major-axis fit (ratio of interquartile ranges, matched
+    medians) over the pixels clear in both; least squares would flatten
+    the filled pixels whenever the dates differ in detail. A median band
+    correlation below 0.5 gives a warning.</li>
+<li><strong>spatial</strong>: interpolate from the surrounding clear pixels. The scores
+    of the first <strong>components</strong> principal components are interpolated by
+    normalised convolution with a Gaussian that widens until every gap is
+    reached, and the spectra are rebuilt from them. The fill invents data:
+    it is refused when the gaps exceed <strong>max_fill</strong> percent of the scene.</li>
+</ul>
+<p>The <strong>hot</strong> output is the HOT map, in reflectance. The output cube keeps
+the input's metadata, with the run in its history and the class
+percentages under <code>cloud_removal</code> in its extended metadata.</p>
+<h2>NOTES</h2>
+<p>The whole cube within the computational region is held in memory as
+32-bit floats, plus a working copy of the bands being filled: about
+1 GB per million pixels for 250 bands.</p>
+<p>The detection thresholds are defined on reflectance. They hold for
+top-of-atmosphere and for surface reflectance; the cirrus test, the
+cirrus correction and the O2-A test need top-of-atmosphere data, since
+an atmospheric correction removes the signal they use.</p>
+<p>The thin-cloud growth bound <strong>thin_blue</strong>=0.08 was chosen on EMIT L2A
+scenes over Belgium, checked against clear dates one week apart: 79-90%
+of the thin-cloud pixels were found, with 0.1-1% false positives on clear
+land. The <strong>o2_margin</strong> default comes from the depth of the O2-A band at
+the surface (about 0.3) and the 5-10% shallower band of a cloud 1 km
+above the ground; it removed bright-soil false positives in a radiance
+scene near Tehran, but has not been checked on a cloudy radiance scene.</p>
+<h2>EXAMPLES</h2>
+<p>Mask clouds and shadows, and set them to NULL:</p>
+<pre><code class="language-sh">i.hyper.cloudremoval input=emit_20230621 output=emit_20230621_cr mask=emit_20230621_mask
+</code></pre>
+<p>Only the mask and the HOT map, on a part of a large scene:</p>
+<pre><code class="language-sh">g.region n=50.86 s=50.82 w=3.99 e=4.08 -a
+i.hyper.cloudremoval input=emit_20230621 mask=cloud_mask hot=hot
+</code></pre>
+<p>Fill from a clear date one week earlier, and the rest by interpolation:</p>
+<pre><code class="language-sh">i.hyper.cloudremoval input=emit_20230621 output=emit_20230621_filled \
+    fill_method=reference,spatial reference=emit_20230614
+</code></pre>
+<p>Top-of-atmosphere radiance: correct cirrus and haze, then remove clouds:</p>
+<pre><code class="language-sh">i.hyper.cloudremoval input=emit_l1b output=emit_l1b_cr mask=emit_l1b_mask \
+    operation=cirrus,haze,fill
+</code></pre>
+<p>Use the quality map of <em>i.hyper.atcorr</em> instead of the cloud tests:</p>
+<pre><code class="language-sh">i.hyper.atcorr input=emit_l1b ... -m quality=atcorr_quality
+i.hyper.cloudremoval input=emit_l1b output=emit_l1b_cr input_mask=atcorr_quality mask_bits=3
+</code></pre>
+<h2>SEE ALSO</h2>
+<p><em><a href="i.hyper.atcorr.html">i.hyper.atcorr</a>,
+<a href="i.hyper.import.html">i.hyper.import</a>,
+<a href="i.hyper.metadata.html">i.hyper.metadata</a>,
+<a href="i.hyper.preproc.html">i.hyper.preproc</a>,
+<a href="i.hyper.rgb.html">i.hyper.rgb</a>,
+<a href="https://grass.osgeo.org/grass-stable/manuals/addons/i.landsat.qa.html">i.landsat.qa</a>,
+<a href="https://grass.osgeo.org/grass-stable/manuals/addons/i.sentinel.mask.html">i.sentinel.mask</a>,
+<a href="https://grass.osgeo.org/grass-stable/manuals/r3.timestamp.html">r3.timestamp</a></em></p>
+<h2>REFERENCES</h2>
+<ul>
+<li>Braaten, J. D., Cohen, W. B., &amp; Yang, Z. (2015). Automated cloud and
+  cloud shadow identification in Landsat MSS imagery for temperate
+  ecosystems. <em>Remote Sensing of Environment</em>, 169, 128-138.</li>
+<li>Gao, B.-C., Goetz, A. F. H., &amp; Wiscombe, W. J. (1993). Cirrus cloud
+  detection from Airborne Imaging Spectrometer data using the 1.38 µm
+  water vapor band. <em>Geophysical Research Letters</em>, 20(4), 301-304.</li>
+<li>Gao, B.-C., Kaufman, Y. J., Han, W., &amp; Wiscombe, W. J. (1998).
+  Correction of thin cirrus path radiances in the 0.4-1.0 µm spectral
+  region using the sensitive 1.375 µm cirrus detecting channel. <em>Journal
+  of Geophysical Research</em>, 103(D24), 32169-32176.</li>
+<li>Gao, B.-C., &amp; Li, R.-R. (2017). Removal of thin cirrus scattering
+  effects in Landsat 8 OLI images using the cirrus detecting channel.
+  <em>Remote Sensing</em>, 9(8), 834.</li>
+<li>Liang, S., Fang, H., &amp; Chen, M. (2001). Atmospheric correction of
+  Landsat ETM+ land surface imagery. I. Methods. <em>IEEE Transactions on
+  Geoscience and Remote Sensing</em>, 39(11), 2490-2498.</li>
+<li>Richter, R. (1996). Atmospheric correction of satellite data with haze
+  removal including a haze/clear transition region. <em>Computers &amp;
+  Geosciences</em>, 22(6), 675-681.</li>
+<li>Thuillier, G., et al. (2003). The solar spectral irradiance from 200 to
+  2400 nm as measured by the SOLSPEC spectrometer from the Atlas and
+  Eureca missions. <em>Solar Physics</em>, 214, 1-22.</li>
+<li>Zhang, Y., Guindon, B., &amp; Cihlar, J. (2002). An image transform to
+  characterize and compensate for spatial variations in thin cloud
+  contamination of Landsat images. <em>Remote Sensing of Environment</em>, 82,
+  173-187.</li>
+<li>Zhu, Z., &amp; Woodcock, C. E. (2012). Object-based cloud and cloud shadow
+  detection in Landsat imagery. <em>Remote Sensing of Environment</em>, 118,
+  83-94.</li>
+</ul>
+<h2>AUTHORS</h2>
+<p>Yann Chemin. The algorithms were implemented with AI assistance (Claude
+Code) and tested on synthetic scenes and on EMIT L1B and L2A scenes.</p>
+
+</body>
+</html>
